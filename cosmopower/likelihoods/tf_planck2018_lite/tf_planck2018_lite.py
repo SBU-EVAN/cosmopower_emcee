@@ -244,14 +244,22 @@ class tf_planck2018_lite:
         -------
         parameters_table : `tf.lookup.experimental.DenseHashTable`
         """
+        #print(parameters_tensor.shape)
+        _pad_length=0
+        if( parameters_tensor.shape!=(120,7) ):
+            _pad_length = 120 - parameters_tensor.shape[0]
+            _pad_tensor = tf.convert_to_tensor(np.array([np.full(parameters_tensor.shape[1],0) for _ in range(_pad_length)]),dtype=tf.float32)
+            parameters_tensor = tf.concat([parameters_tensor,_pad_tensor],0)
+            
         parameters_values = tf.transpose(parameters_tensor)
         parameters_table = tf.lookup.experimental.DenseHashTable(key_dtype=tf.string, 
                                                                  value_dtype=tf.float32, 
                                                                  empty_key="<EMPTY_SENTINEL>", 
                                                                  deleted_key="<DELETE_SENTINEL>", 
                                                                  default_value=tf.zeros([parameters_tensor.shape[0]]))
+        
         parameters_table.insert(self.parameter_keys, parameters_values)
-        return parameters_table
+        return parameters_table,_pad_length
 
 
     @tf.function
@@ -268,10 +276,10 @@ class tf_planck2018_lite:
         loglkl : `tf.Tensor`
         """
         # creating lookup table with parameters
-        parameters_table = self.from_parameters_tensor_to_table(parameters)
-        cal = parameters_table.lookup(tf.constant(['A_planck']))
+        parameters_table,pad = self.from_parameters_tensor_to_table(parameters)
+        cal = parameters_table.lookup(tf.constant(['A_planck']))[:,:120-pad]
         cosmo_params = tf.transpose(parameters_table.lookup(tf.constant(self.tt_emu_model.parameters)))
-
+        cosmo_params = cosmo_params[:(120-pad)]
         # sourcing C_ells from CosmoPower
         Cltt= self.tt_emu_model.ten_to_predictions_tf(cosmo_params)
         Clte= self.te_emu_model.predictions_tf(cosmo_params)
@@ -299,7 +307,8 @@ class tf_planck2018_lite:
         chi2 = tf.matmul(diff_vec, chi2)
         chi2 = tf.linalg.diag_part(chi2)
         loglkl = tf.scalar_mul(-0.5, chi2)
-        loglkl = tf.reshape(loglkl, [parameters.shape[0], 1])
+        
+        #loglkl = tf.reshape(loglkl, [parameters.shape[0]])#, 1])
 
         return loglkl
 
@@ -359,9 +368,10 @@ class tf_planck2018_lite:
         -------
         sum_loglkl_logpr : `tf.Tensor`
         """
-        pr = tf.reshape(self.priors.prob(params), [params.shape[0], 1])
-        logprodPri, loglike  = tf.math.log(pr), self.loglkl(params, pr)
-        logprodPri = tf.where(tf.math.is_inf(logprodPri), -1e32, logprodPri)
+        pr = self.priors.prob(params)#tf.reshape(self.priors.prob(params), [params.shape[0]])#, 1])
+        loglike = self.loglkl(params, pr)
+        logprodPri = tf.math.log(pr)
+        #logprodPri = tf.where(tf.math.is_inf(logprodPri), -1e32, logprodPri)
         sum_loglkl_logpr = tf.add(loglike, logprodPri)
 
         return sum_loglkl_logpr
